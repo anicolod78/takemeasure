@@ -1,5 +1,48 @@
 import 'dart:convert';
 
+/// Tipo di apertura collocabile su un lato.
+enum OpeningType {
+  door('Porta'),
+  window('Finestra'),
+  opening('Apertura');
+
+  final String label;
+  const OpeningType(this.label);
+
+  static OpeningType fromName(String? name) => OpeningType.values.firstWhere(
+        (t) => t.name == name,
+        orElse: () => OpeningType.opening,
+      );
+}
+
+/// Un'apertura (porta/finestra/vano) collocata su un lato.
+///
+/// [offsetCm] è la distanza, lungo il lato, dal vertice iniziale all'inizio
+/// dell'apertura; [widthCm] è la larghezza dell'apertura.
+class Opening {
+  OpeningType type;
+  double widthCm;
+  double offsetCm;
+
+  Opening({
+    required this.type,
+    required this.widthCm,
+    required this.offsetCm,
+  });
+
+  Map<String, dynamic> toJson() => {
+        'type': type.name,
+        'widthCm': widthCm,
+        'offsetCm': offsetCm,
+      };
+
+  factory Opening.fromJson(Map<String, dynamic> json) => Opening(
+        type: OpeningType.fromName(json['type'] as String?),
+        widthCm: (json['widthCm'] as num).toDouble(),
+        offsetCm: (json['offsetCm'] as num).toDouble(),
+      );
+}
+
 /// Un vertice (angolo) del poligono della stanza.
 ///
 /// Le coordinate [gx]/[gy] sono espresse in unità di griglia (interi logici):
@@ -18,18 +61,23 @@ class Vertex {
   /// chiuso, il segmento di chiusura verso il primo vertice).
   double? lengthToNextCm;
 
+  /// Aperture collocate sul lato che parte da questo vertice.
+  List<Opening> openings;
+
   Vertex({
     required this.gx,
     required this.gy,
     this.heightCm,
     this.lengthToNextCm,
-  });
+    List<Opening>? openings,
+  }) : openings = openings ?? [];
 
   Map<String, dynamic> toJson() => {
         'gx': gx,
         'gy': gy,
         'heightCm': heightCm,
         'lengthToNextCm': lengthToNextCm,
+        'openings': openings.map((o) => o.toJson()).toList(),
       };
 
   factory Vertex.fromJson(Map<String, dynamic> json) => Vertex(
@@ -37,6 +85,10 @@ class Vertex {
         gy: (json['gy'] as num).toDouble(),
         heightCm: (json['heightCm'] as num?)?.toDouble(),
         lengthToNextCm: (json['lengthToNextCm'] as num?)?.toDouble(),
+        openings: (json['openings'] as List<dynamic>?)
+                ?.map((e) => Opening.fromJson(e as Map<String, dynamic>))
+                .toList() ??
+            [],
       );
 }
 

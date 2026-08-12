@@ -74,10 +74,22 @@ class RoomStats {
   /// (serve poligono chiuso e tutti i lati del percorso misurati).
   final double? areaM2;
 
+  /// Altezza media (cm) degli angoli con altezza definita, o null.
+  final double? heightAvgCm;
+
+  /// True se tutti gli angoli hanno la stessa altezza (volume esatto).
+  final bool heightUniform;
+
+  /// Volume in metri cubi (area × altezza media), o null se non calcolabile.
+  final double? volumeM3;
+
   const RoomStats({
     required this.perimeterCm,
     required this.perimeterComplete,
     required this.areaM2,
+    required this.heightAvgCm,
+    required this.heightUniform,
+    required this.volumeM3,
   });
 }
 
@@ -95,10 +107,27 @@ RoomStats computeStats(MeasureSession s) {
       complete = false;
     }
   }
+
+  // Altezze.
+  final heights =
+      s.vertices.map((v) => v.heightCm).whereType<double>().toList();
+  double? avgH;
+  bool uniform = false;
+  if (heights.isNotEmpty) {
+    avgH = heights.reduce((a, b) => a + b) / heights.length;
+    uniform = heights.every((h) => (h - heights.first).abs() < 0.001);
+  }
+
+  final area = _areaM2(s);
+  final volume = (area != null && avgH != null) ? area * (avgH / 100) : null;
+
   return RoomStats(
     perimeterCm: any ? sum : null,
     perimeterComplete: complete,
-    areaM2: _areaM2(s),
+    areaM2: area,
+    heightAvgCm: avgH,
+    heightUniform: uniform,
+    volumeM3: volume,
   );
 }
 

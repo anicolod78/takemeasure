@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
@@ -18,6 +19,7 @@ class MeasureColors {
   final Color heightText;
   final Color lengthBox;
   final Color heightBox;
+  final Color opening;
 
   const MeasureColors({
     required this.grid,
@@ -30,6 +32,7 @@ class MeasureColors {
     required this.heightText,
     required this.lengthBox,
     required this.heightBox,
+    required this.opening,
   });
 
   static const light = MeasureColors(
@@ -43,6 +46,7 @@ class MeasureColors {
     heightText: Colors.white,
     lengthBox: Color(0xFF1565C0),
     heightBox: Color(0xFFEF6C00),
+    opening: Color(0xFF00897B),
   );
 }
 
@@ -106,6 +110,16 @@ class MeasurePainter extends CustomPainter {
       canvas.drawLine(a, b, linePaint);
     }
 
+    // Aperture (porte/finestre) sui lati.
+    for (int i = 0; i < segCount; i++) {
+      final len = session.vertices[i].lengthToNextCm;
+      final openings = session.vertices[i].openings;
+      if (len == null || len <= 0 || openings.isEmpty) continue;
+      final a = points[i];
+      final b = points[(i + 1) % points.length];
+      _paintOpenings(canvas, a, b, len, openings);
+    }
+
     // Etichette lunghezza (al centro di ogni segmento).
     for (int i = 0; i < segCount; i++) {
       final a = points[i];
@@ -154,6 +168,82 @@ class MeasurePainter extends CustomPainter {
           colors.heightText,
         );
       }
+    }
+  }
+
+  void _paintOpenings(
+    Canvas canvas,
+    Offset a,
+    Offset b,
+    double lenCm,
+    List<Opening> openings,
+  ) {
+    final full = b - a;
+    final dist = full.distance;
+    if (dist == 0) return;
+    final u = full / dist; // unità lungo il lato
+    final normal = Offset(-u.dy, u.dx); // 90° a sinistra
+    final thickness = math.max(4.0, dist * 0.012);
+
+    for (final op in openings) {
+      final f0 = (op.offsetCm / lenCm).clamp(0.0, 1.0);
+      final f1 = ((op.offsetCm + op.widthCm) / lenCm).clamp(0.0, 1.0);
+      final p0 = a + full * f0;
+      final p1 = a + full * f1;
+      final widthPx = (p1 - p0).distance;
+
+      // Sovrascrive il muro con un tratto chiaro (il vano).
+      canvas.drawLine(
+        p0,
+        p1,
+        Paint()
+          ..color = Colors.white
+          ..strokeWidth = thickness + 2,
+      );
+      // Tratto colorato dell'apertura.
+      canvas.drawLine(
+        p0,
+        p1,
+        Paint()
+          ..color = colors.opening
+          ..strokeWidth = thickness
+          ..strokeCap = StrokeCap.butt,
+      );
+
+      final capPaint = Paint()
+        ..color = colors.opening
+        ..strokeWidth = math.max(2.0, thickness * 0.5)
+        ..strokeCap = StrokeCap.round;
+      final cap = normal * (thickness * 0.9);
+      canvas.drawLine(p0 - cap, p0 + cap, capPaint);
+      canvas.drawLine(p1 - cap, p1 + cap, capPaint);
+
+      // Arco di apertura per le porte (anta + oscillazione).
+      if (op.type == OpeningType.door && widthPx > 1) {
+        final arcPaint = Paint()
+          ..color = colors.opening
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = math.max(1.5, thickness * 0.35);
+        final startAngle = math.atan2(u.dy, u.dx);
+        canvas.drawArc(
+          Rect.fromCircle(center: p0, radius: widthPx),
+          startAngle,
+          math.pi / 2,
+          false,
+          arcPaint,
+        );
+        canvas.drawLine(p0, p0 + normal * widthPx, arcPaint);
+      }
+
+      // Etichetta (dal lato opposto rispetto alla misura del lato).
+      final mid = (p0 + p1) / 2 - normal * 16;
+      _drawLabel(
+        canvas,
+        mid,
+        '${op.type.label} ${formatCm(op.widthCm)}',
+        colors.opening,
+        Colors.white,
+      );
     }
   }
 
@@ -269,6 +359,10 @@ Future<Uint8List> renderSessionToPng(
   }
   if (stats.areaM2 != null) {
     infoParts.add('Area: ${stats.areaM2!.toStringAsFixed(2).replaceAll('.', ',')} m²');
+  }
+  if (stats.volumeM3 != null) {
+    infoParts.add(
+        'Volume: ${stats.heightUniform ? '' : '≈ '}${stats.volumeM3!.toStringAsFixed(2).replaceAll('.', ',')} m³');
   }
 
   final header = TextPainter(

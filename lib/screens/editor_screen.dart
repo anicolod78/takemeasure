@@ -8,7 +8,7 @@ import '../services/geometry.dart';
 import '../services/session_repository.dart';
 import '../widgets/measure_painter.dart';
 
-enum EditMode { draw, move, length, height }
+enum EditMode { draw, move, length, height, opening }
 
 class EditorScreen extends StatefulWidget {
   final MeasureSession session;
@@ -91,6 +91,10 @@ class _EditorScreenState extends State<EditorScreen> {
       case EditMode.height:
         final i = _nearestVertex(canvasPoint);
         if (i != null) _editHeight(i);
+        break;
+      case EditMode.opening:
+        final i = _nearestSegment(canvasPoint);
+        if (i != null) _manageOpenings(i);
         break;
     }
   }
@@ -295,10 +299,229 @@ class _EditorScreenState extends State<EditorScreen> {
       initial: current,
     );
     if (value == null) return;
+    int propagated = 0;
     setState(() {
       _session.vertices[vIndex].heightCm = value.cleared ? null : value.value;
+      // Riporta l'altezza sugli angoli ancora privi di valore.
+      if (!value.cleared) {
+        for (final v in _session.vertices) {
+          if (v.heightCm == null) {
+            v.heightCm = value.value;
+            propagated++;
+          }
+        }
+      }
     });
     _persist();
+    if (propagated > 0) {
+      _snack('Altezza riportata su $propagated ${propagated == 1 ? 'angolo' : 'angoli'} senza valore.');
+    }
+  }
+
+  // --- Aperture ------------------------------------------------------------
+
+  IconData _openingIcon(OpeningType t) {
+    switch (t) {
+      case OpeningType.door:
+        return Icons.sensor_door_outlined;
+      case OpeningType.window:
+        return Icons.window_outlined;
+      case OpeningType.opening:
+        return Icons.crop_din;
+    }
+  }
+
+  Future<void> _manageOpenings(int segIndex) async {
+    final vertex = _session.vertices[segIndex];
+    final len = vertex.lengthToNextCm;
+    if (len == null) {
+      _snack('Imposta prima la misura del lato ${segIndex + 1}.');
+      return;
+    }
+    await showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (ctx, setSheet) {
+            void refresh() {
+              setSheet(() {});
+              setState(() {});
+              _persist();
+            }
+
+            return SafeArea(
+              child: Padding(
+                padding: EdgeInsets.only(
+                  left: 16,
+                  right: 16,
+                  bottom: MediaQuery.of(ctx).viewInsets.bottom + 16,
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Aperture · Lato ${segIndex + 1} (${formatCm(len)} cm)',
+                      style: Theme.of(ctx).textTheme.titleMedium,
+                    ),
+                    const SizedBox(height: 8),
+                    if (vertex.openings.isEmpty)
+                      const Padding(
+                        padding: EdgeInsets.symmetric(vertical: 12),
+                        child: Text('Nessuna apertura su questo lato.'),
+                      ),
+                    ...vertex.openings.asMap().entries.map((e) {
+                      final idx = e.key;
+                      final op = e.value;
+                      return ListTile(
+                        contentPadding: EdgeInsets.zero,
+                        leading: Icon(_openingIcon(op.type)),
+                        title:
+                            Text('${op.type.label} · ${formatCm(op.widthCm)} cm'),
+                        subtitle: Text(
+                            'Posizione: ${formatCm(op.offsetCm)} cm dall\'inizio'),
+                        trailing: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            IconButton(
+                              icon: const Icon(Icons.edit),
+                              onPressed: () async {
+                                final res = await _editOpening(
+                                    maxLen: len, existing: op);
+                                if (res != null) {
+                                  vertex.openings[idx] = res;
+                                  refresh();
+                                }
+                              },
+                            ),
+                            IconButton(
+                              icon: const Icon(Icons.delete_outline),
+                              onPressed: () {
+                                vertex.openings.removeAt(idx);
+                                refresh();
+                              },
+                            ),
+                          ],
+                        ),
+                      );
+                    }),
+                    const SizedBox(height: 8),
+                    FilledButton.icon(
+                      onPressed: () async {
+                        final res = await _editOpening(maxLen: len);
+                        if (res != null) {
+                          vertex.openings.add(res);
+                          refresh();
+                        }
+                      },
+                      icon: const Icon(Icons.add),
+                      label: const Text('Aggiungi apertura'),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Future<Opening?> _editOpening({
+    required double maxLen,
+    Opening? existing,
+  }) {
+    OpeningType type = existing?.type ?? OpeningType.door;
+    final widthCtrl = TextEditingController(
+        text: existing != null ? formatCm(existing.widthCm) : '');
+    final offsetCtrl = TextEditingController(
+        text: existing != null ? formatCm(existing.offsetCm) : '');
+    String? error;
+    const numKeyboard = TextInputType.numberWithOptions(decimal: true);
+
+    return showDialog<Opening>(
+      context: context,
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (ctx, setD) {
+            return AlertDialog(
+              title: Text(existing == null ? 'Nuova apertura' : 'Modifica apertura'),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Wrap(
+                    spacing: 8,
+                    children: OpeningType.values
+                        .map((t) => ChoiceChip(
+                              label: Text(t.label),
+                              selected: type == t,
+                              onSelected: (_) => setD(() => type = t),
+                            ))
+                        .toList(),
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: widthCtrl,
+                    keyboardType: numKeyboard,
+                    decoration: const InputDecoration(
+                        labelText: 'Larghezza', suffixText: 'cm'),
+                  ),
+                  TextField(
+                    controller: offsetCtrl,
+                    keyboardType: numKeyboard,
+                    decoration: InputDecoration(
+                      labelText: 'Posizione dall\'inizio',
+                      suffixText: 'cm',
+                      helperText: 'Lato di ${formatCm(maxLen)} cm',
+                    ),
+                  ),
+                  if (error != null)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 8),
+                      child: Text(error!,
+                          style: TextStyle(
+                              color: Theme.of(ctx).colorScheme.error)),
+                    ),
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(ctx),
+                  child: const Text('Annulla'),
+                ),
+                FilledButton(
+                  onPressed: () {
+                    final w = double.tryParse(
+                        widthCtrl.text.trim().replaceAll(',', '.'));
+                    final o = double.tryParse(
+                        offsetCtrl.text.trim().replaceAll(',', '.'));
+                    if (w == null || w <= 0) {
+                      setD(() => error = 'Larghezza non valida.');
+                      return;
+                    }
+                    if (o == null || o < 0) {
+                      setD(() => error = 'Posizione non valida.');
+                      return;
+                    }
+                    if (o + w > maxLen + 0.001) {
+                      setD(() => error =
+                          'L\'apertura esce dal lato (max ${formatCm(maxLen)} cm).');
+                      return;
+                    }
+                    Navigator.pop(
+                        ctx, Opening(type: type, widthCm: w, offsetCm: o));
+                  },
+                  child: const Text('Salva'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
   }
 
   Future<_NumberResult?> _askNumber({
@@ -582,6 +805,9 @@ class _EditorScreenState extends State<EditorScreen> {
     final area = stats.areaM2 == null
         ? '—'
         : '${stats.areaM2!.toStringAsFixed(2).replaceAll('.', ',')} m²';
+    final volume = stats.volumeM3 == null
+        ? '—'
+        : '${stats.heightUniform ? '' : '≈ '}${stats.volumeM3!.toStringAsFixed(2).replaceAll('.', ',')} m³';
 
     return Container(
       width: double.infinity,
@@ -590,8 +816,10 @@ class _EditorScreenState extends State<EditorScreen> {
       child: Row(
         children: [
           Expanded(child: _statChip(Icons.straighten, 'Perimetro', perim)),
-          const SizedBox(width: 8),
+          const SizedBox(width: 6),
           Expanded(child: _statChip(Icons.crop_square, 'Area', area)),
+          const SizedBox(width: 6),
+          Expanded(child: _statChip(Icons.view_in_ar, 'Volume', volume)),
         ],
       ),
     );
@@ -600,16 +828,20 @@ class _EditorScreenState extends State<EditorScreen> {
   Widget _statChip(IconData icon, String label, String value) {
     return Row(
       children: [
-        Icon(icon, size: 18),
-        const SizedBox(width: 6),
+        Icon(icon, size: 16),
+        const SizedBox(width: 5),
         Expanded(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisSize: MainAxisSize.min,
             children: [
               Text(label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                   style: Theme.of(context).textTheme.labelSmall),
               Text(value,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                   style: Theme.of(context)
                       .textTheme
                       .titleSmall
@@ -647,6 +879,10 @@ class _EditorScreenState extends State<EditorScreen> {
         case EditMode.height:
           text = 'Tocca un angolo per registrare l\'altezza da terra.';
           icon = Icons.height;
+          break;
+        case EditMode.opening:
+          text = 'Tocca un lato per aggiungere porte/aperture (larghezza e posizione).';
+          icon = Icons.sensor_door_outlined;
           break;
       }
     }
@@ -743,6 +979,7 @@ class _EditorScreenState extends State<EditorScreen> {
                 _modeChip(EditMode.move, Icons.open_with, 'Sposta'),
                 _modeChip(EditMode.length, Icons.straighten, 'Misure'),
                 _modeChip(EditMode.height, Icons.height, 'Altezze'),
+                _modeChip(EditMode.opening, Icons.sensor_door_outlined, 'Aperture'),
               ],
             ),
           ),
