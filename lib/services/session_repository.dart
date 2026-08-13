@@ -48,4 +48,27 @@ class SessionRepository {
     sessions.removeWhere((s) => s.id == id);
     await _saveAll(sessions);
   }
+
+  /// Sostituisce tutte le sessioni salvate con quelle fornite.
+  Future<void> replaceAll(List<MeasureSession> sessions) =>
+      _saveAll(sessions);
+
+  /// Unisce le sessioni fornite con quelle esistenti (per id): aggiorna quelle
+  /// già presenti e aggiunge le nuove. Restituisce i conteggi.
+  Future<({int added, int updated})> importMerge(
+      List<MeasureSession> incoming) async {
+    final current = await loadAll();
+    final map = {for (final s in current) s.id: s};
+    int added = 0, updated = 0;
+    for (final s in incoming) {
+      if (map.containsKey(s.id)) {
+        updated++;
+      } else {
+        added++;
+      }
+      map[s.id] = s;
+    }
+    await _saveAll(map.values.toList());
+    return (added: added, updated: updated);
+  }
 }

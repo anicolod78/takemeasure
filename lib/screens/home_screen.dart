@@ -1,7 +1,10 @@
+import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 import 'package:uuid/uuid.dart';
 
 import '../models/measure_session.dart';
+import '../services/backup.dart';
+import '../services/export_service.dart';
 import '../services/session_repository.dart';
 import 'editor_screen.dart';
 
@@ -14,6 +17,7 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   final _repo = SessionRepository();
+  final _export = ExportService();
   List<MeasureSession> _sessions = [];
   bool _loading = true;
 
@@ -112,11 +116,125 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
+  Future<void> _backup() async {
+    if (_sessions.isEmpty) {
+      _snack('Nessuna misurazione da salvare.');
+      return;
+    }
+    try {
+      await _export.shareBackup(_sessions);
+    } catch (e) {
+      _snack('Errore durante il backup: $e');
+    }
+  }
+
+  Future<void> _restore() async {
+    try {
+      const group = XTypeGroup(
+        label: 'Backup JSON',
+        extensions: ['json'],
+        mimeTypes: ['application/json'],
+      );
+      final file = await openFile(acceptedTypeGroups: [group]);
+      if (file == null) return; // annullato
+
+      final content = await file.readAsString();
+      final List<MeasureSession> sessions;
+      try {
+        sessions = decodeBackup(content);
+      } catch (_) {
+        _snack('File non valido: non è un backup di Take Measure.');
+        return;
+      }
+      if (sessions.isEmpty) {
+        _snack('Il file non contiene misurazioni.');
+        return;
+      }
+      if (!mounted) return;
+
+      final mode = await _askRestoreMode(sessions.length);
+      if (mode == null) return;
+
+      if (mode == 'replace') {
+        await _repo.replaceAll(sessions);
+        _snack('Ripristinate ${sessions.length} misurazioni (sostituzione).');
+      } else {
+        final r = await _repo.importMerge(sessions);
+        _snack('Importate: ${r.added} nuove, ${r.updated} aggiornate.');
+      }
+      await _load();
+    } catch (e) {
+      _snack('Errore durante il ripristino: $e');
+    }
+  }
+
+  Future<String?> _askRestoreMode(int count) {
+    return showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Ripristina misurazioni'),
+        content: Text(
+          'Il file contiene $count misurazioni.\n\n'
+          '• Unisci: aggiunge le nuove e aggiorna quelle già presenti.\n'
+          '• Sostituisci tutto: rimpiazza le misurazioni attuali.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Annulla'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, 'merge'),
+            child: const Text('Unisci'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: Colors.red),
+            onPressed: () => Navigator.pop(ctx, 'replace'),
+            child: const Text('Sostituisci tutto'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _snack(String msg) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text(msg)));
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Le mie misure'),
+        actions: [
+          PopupMenuButton<String>(
+            tooltip: 'Backup e ripristino',
+            icon: const Icon(Icons.more_vert),
+            onSelected: (v) {
+              if (v == 'backup') _backup();
+              if (v == 'restore') _restore();
+            },
+            itemBuilder: (ctx) => [
+              const PopupMenuItem(
+                value: 'backup',
+                child: ListTile(
+                  leading: Icon(Icons.backup_outlined),
+                  title: Text('Backup (esporta tutto)'),
+                ),
+              ),
+              const PopupMenuItem(
+                value: 'restore',
+                child: ListTile(
+                  leading: Icon(Icons.restore),
+                  title: Text('Ripristina da file'),
+                ),
+              ),
+            ],
+          ),
+        ],
       ),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: _createSession,

@@ -5,9 +5,31 @@ import 'package:share_plus/share_plus.dart';
 
 import '../models/measure_session.dart';
 import '../widgets/measure_painter.dart';
+import 'backup.dart';
 
 /// Esportazione e condivisione delle sessioni.
 class ExportService {
+  /// Genera un file di backup con tutte le sessioni e apre la condivisione.
+  Future<void> shareBackup(List<MeasureSession> sessions) async {
+    final now = DateTime.now();
+    final content = encodeBackup(sessions, now);
+    final dir = await getTemporaryDirectory();
+    final file =
+        File('${dir.path}/takemeasure_backup_${_stamp(now)}.json');
+    await file.writeAsString(content);
+    await SharePlus.instance.share(
+      ShareParams(
+        files: [XFile(file.path, mimeType: 'application/json')],
+        subject: 'Backup misurazioni Take Measure',
+      ),
+    );
+  }
+
+  String _stamp(DateTime d) {
+    String two(int n) => n.toString().padLeft(2, '0');
+    return '${d.year}${two(d.month)}${two(d.day)}_${two(d.hour)}${two(d.minute)}';
+  }
+
   /// Genera un PNG del disegno e apre il foglio di condivisione.
   Future<void> shareAsPng(MeasureSession session) async {
     final bytes = await renderSessionToPng(session);
